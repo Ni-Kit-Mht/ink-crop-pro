@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { Upload, RotateCcw, Download, Maximize2, Minimize2, Sparkles, Save, Printer, Copy, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { PrintLayoutEditor } from "@/components/PrintLayoutEditor";
 
 type PaperSize = { w: number; h: number };
 type CropSize = { w: number; h: number };
@@ -41,6 +42,7 @@ const Index = () => {
   
   const [savedCrops, setSavedCrops] = useState<SavedCrop[]>([]);
   const [selectedCrops, setSelectedCrops] = useState<Set<string>>(new Set());
+  const [showPrintLayout, setShowPrintLayout] = useState(false);
   
   const [dpi, setDpi] = useState(300);
   const [paperSize, setPaperSize] = useState<PaperSize>({ w: 4, h: 6 });
@@ -629,52 +631,12 @@ const Index = () => {
     toast.success("Selected crops deleted");
   };
 
-  const handlePrint = () => {
+  const handleOpenPrintLayout = () => {
     if (savedCrops.length === 0) {
-      toast.error("No crops to print");
+      toast.error("Save crops to gallery first");
       return;
     }
-    
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) {
-      toast.error("Popup blocked - please allow popups");
-      return;
-    }
-    
-    const cropsToUse = selectedCrops.size > 0
-      ? savedCrops.filter((crop) => selectedCrops.has(crop.id))
-      : savedCrops;
-    
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Print Crops</title>
-          <style>
-            body { margin: 0; padding: 20px; }
-            .crop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
-            img { max-width: 100%; height: auto; border: 1px solid #ccc; }
-            @media print {
-              .crop-grid { gap: 10px; }
-              img { page-break-inside: avoid; }
-            }
-          </style>
-        </head>
-        <body>
-          <div class="crop-grid">
-            ${cropsToUse.map((crop) => `<img src="${crop.dataUrl}" alt="Crop ${crop.width}x${crop.height}" />`).join("")}
-          </div>
-          <script>
-            window.onload = () => {
-              setTimeout(() => {
-                window.print();
-              }, 500);
-            };
-          </script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
+    setShowPrintLayout(true);
   };
 
   const cropPxW = inchesToPx(cropSize.w);
@@ -755,9 +717,9 @@ const Index = () => {
                   <Download className="mr-2 h-4 w-4" />
                   Export PNG
                 </Button>
-                <Button onClick={handlePrint} variant="outline" size="sm" disabled={savedCrops.length === 0}>
+                <Button onClick={handleOpenPrintLayout} variant="outline" size="sm" disabled={savedCrops.length === 0}>
                   <Printer className="mr-2 h-4 w-4" />
-                  Print {selectedCrops.size > 0 ? `(${selectedCrops.size})` : `All (${savedCrops.length})`}
+                  Print Layout
                 </Button>
               </div>
             </div>
@@ -1026,6 +988,13 @@ const Index = () => {
           </div>
         </div>
       </div>
+      
+      {showPrintLayout && (
+        <PrintLayoutEditor
+          savedCrops={savedCrops}
+          onClose={() => setShowPrintLayout(false)}
+        />
+      )}
     </div>
   );
 };
