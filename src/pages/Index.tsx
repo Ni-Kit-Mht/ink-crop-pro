@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { Upload, RotateCcw, Download, Maximize2, Minimize2 } from "lucide-react";
+import { Upload, RotateCcw, Download, Maximize2, Minimize2, Sparkles, Save, Printer, Copy, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 type PaperSize = { w: number; h: number };
@@ -19,12 +19,28 @@ type ImageState = {
   lastY: number;
 };
 
+type SavedCrop = {
+  id: string;
+  dataUrl: string;
+  width: number;
+  height: number;
+  timestamp: number;
+};
+
 const Index = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [dragMoved, setDragMoved] = useState(false);
+  const [originalImageData, setOriginalImageData] = useState<ImageData | null>(null);
+  
+  const [clarity, setClarity] = useState(0);
+  const [targetClarity, setTargetClarity] = useState(0);
+  const [animatingClarity, setAnimatingClarity] = useState(false);
+  
+  const [savedCrops, setSavedCrops] = useState<SavedCrop[]>([]);
+  const [selectedCrops, setSelectedCrops] = useState<Set<string>>(new Set());
   
   const [dpi, setDpi] = useState(300);
   const [paperSize, setPaperSize] = useState<PaperSize>({ w: 4, h: 6 });
@@ -91,6 +107,59 @@ const Index = () => {
     });
   }, [imageLoaded, image, fitMode]);
 
+  const applyConvolution = useCallback((imageData: ImageData, kernel: number[]) => {
+    const { data, width, height } = imageData;
+    const output = new Uint8ClampedArray(data.length);
+    const side = Math.round(Math.sqrt(kernel.length));
+    const halfSide = Math.floor(side / 2);
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        let r = 0, g = 0, b = 0;
+        for (let ky = 0; ky < side; ky++) {
+          for (let kx = 0; kx < side; kx++) {
+            const px = x + kx - halfSide;
+            const py = y + ky - halfSide;
+            if (px >= 0 && px < width && py >= 0 && py < height) {
+              const idx = (py * width + px) * 4;
+              const wt = kernel[ky * side + kx];
+              r += data[idx] * wt;
+              g += data[idx + 1] * wt;
+              b += data[idx + 2] * wt;
+            }
+          }
+        }
+        const idx = (y * width + x) * 4;
+        output[idx] = Math.min(Math.max(r, 0), 255);
+        output[idx + 1] = Math.min(Math.max(g, 0), 255);
+        output[idx + 2] = Math.min(Math.max(b, 0), 255);
+        output[idx + 3] = 255;
+      }
+    }
+    
+    for (let i = 0; i < data.length; i++) {
+      data[i] = output[i];
+    }
+  }, []);
+
+  const applyClarity = useCallback((clarityValue: number, sourceImageData: ImageData) => {
+    const imgData = new ImageData(
+      new Uint8ClampedArray(sourceImageData.data),
+      sourceImageData.width,
+      sourceImageData.height
+    );
+
+    if (clarityValue !== 0) {
+      const kernel = clarityValue >= 0
+        ? [0, -1, 0, -1, 5 + clarityValue / 20, -1, 0, -1, 0]
+        : [0, 1, 0, 1, 3 + clarityValue / 50, 1, 0, 1, 0];
+      
+      applyConvolution(imgData, kernel);
+    }
+
+    return imgData;
+  }, [applyConvolution]);
+
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -102,11 +171,28 @@ const Index = () => {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     if (imageLoaded && image) {
-      ctx.save();
-      ctx.translate(imageState.offsetX, imageState.offsetY);
-      ctx.scale(imageState.scale, imageState.scale);
-      ctx.drawImage(image, 0, 0);
-      ctx.restore();
+      // Draw image first
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      const tempCtx = tempCanvas.getContext("2d");
+      if (!tempCtx) return;
+
+      tempCtx.save();
+      tempCtx.translate(imageState.offsetX, imageState.offsetY);
+      tempCtx.scale(imageState.scale, imageState.scale);
+      tempCtx.drawImage(image, 0, 0);
+      tempCtx.restore();
+
+      const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+      
+      // Apply clarity if needed
+      if (clarity !== 0 && originalImageData) {
+        const processedData = applyClarity(clarity, imageData);
+        ctx.putImageData(processedData, 0, 0);
+      } else {
+        ctx.putImageData(imageData, 0, 0);
+      }
     }
 
     // Crop overlay
@@ -136,7 +222,7 @@ const Index = () => {
     ctx.lineTo(cx + cropPxW / 2, cy + cropPxH / 2 + 12);
     ctx.stroke();
     ctx.restore();
-  }, [imageLoaded, image, imageState, cropSize, dpi, paperSize]);
+  }, [imageLoaded, image, imageState, cropSize, dpi, paperSize, clarity, originalImageData, applyClarity]);
 
   useEffect(() => {
     updateCanvasSize();
@@ -157,6 +243,17 @@ const Index = () => {
     img.onload = () => {
       setImage(img);
       setImageLoaded(true);
+      
+      // Store original image data for clarity processing
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = img.width;
+      tempCanvas.height = img.height;
+      const tempCtx = tempCanvas.getContext("2d");
+      if (tempCtx) {
+        tempCtx.drawImage(img, 0, 0);
+        setOriginalImageData(tempCtx.getImageData(0, 0, img.width, img.height));
+      }
+      
       toast.success("Image loaded successfully");
     };
     img.onerror = () => {
@@ -382,14 +479,11 @@ const Index = () => {
     toast.success("Preset applied");
   };
 
-  const handleExport = () => {
-    if (!imageLoaded || !image) {
-      toast.error("Load an image first");
-      return;
-    }
+  const getCroppedCanvas = () => {
+    if (!imageLoaded || !image) return null;
     
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return null;
     
     const cropPxW = inchesToPx(cropSize.w);
     const cropPxH = inchesToPx(cropSize.h);
@@ -400,15 +494,54 @@ const Index = () => {
     outCanvas.width = cropPxW;
     outCanvas.height = cropPxH;
     const outCtx = outCanvas.getContext("2d", { alpha: true });
-    if (!outCtx) return;
+    if (!outCtx) return null;
     
     outCtx.fillStyle = "#fff";
     outCtx.fillRect(0, 0, outCanvas.width, outCanvas.height);
+    
+    // Draw the image with current transform
     outCtx.save();
     outCtx.translate(imageState.offsetX - cropX, imageState.offsetY - cropY);
     outCtx.scale(imageState.scale, imageState.scale);
     outCtx.drawImage(image, 0, 0);
     outCtx.restore();
+    
+    // Apply clarity to the cropped area
+    if (clarity !== 0) {
+      const imageData = outCtx.getImageData(0, 0, outCanvas.width, outCanvas.height);
+      const processedData = applyClarity(clarity, imageData);
+      outCtx.putImageData(processedData, 0, 0);
+    }
+    
+    return outCanvas;
+  };
+
+  const handleSaveCrop = () => {
+    const outCanvas = getCroppedCanvas();
+    if (!outCanvas) {
+      toast.error("Load an image first");
+      return;
+    }
+    
+    const dataUrl = outCanvas.toDataURL("image/png");
+    const newCrop: SavedCrop = {
+      id: `crop-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      dataUrl,
+      width: outCanvas.width,
+      height: outCanvas.height,
+      timestamp: Date.now(),
+    };
+    
+    setSavedCrops((prev) => [...prev, newCrop]);
+    toast.success("Crop saved to gallery");
+  };
+
+  const handleExport = () => {
+    const outCanvas = getCroppedCanvas();
+    if (!outCanvas) {
+      toast.error("Load an image first");
+      return;
+    }
     
     const dataUrl = outCanvas.toDataURL("image/png");
     const link = document.createElement("a");
@@ -427,6 +560,121 @@ const Index = () => {
     if (!imageLoaded) {
       fileInputRef.current?.click();
     }
+  };
+
+  // Clarity animation
+  useEffect(() => {
+    if (!animatingClarity) return;
+    
+    let animationFrame: number;
+    const animate = () => {
+      setClarity((current) => {
+        const diff = targetClarity - current;
+        if (Math.abs(diff) < 0.5) {
+          setAnimatingClarity(false);
+          return targetClarity;
+        }
+        return current + diff * 0.2;
+      });
+      animationFrame = requestAnimationFrame(animate);
+    };
+    
+    animationFrame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animationFrame);
+  }, [animatingClarity, targetClarity]);
+
+  const handleClarityChange = (value: number[]) => {
+    setTargetClarity(value[0]);
+    setAnimatingClarity(true);
+  };
+
+  const toggleCropSelection = (id: string) => {
+    setSelectedCrops((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
+  };
+
+  const handleCopySelected = () => {
+    if (selectedCrops.size === 0) {
+      toast.error("Select crops to copy");
+      return;
+    }
+    
+    const cropsToCopy = savedCrops.filter((crop) => selectedCrops.has(crop.id));
+    const duplicates = cropsToCopy.map((crop) => ({
+      ...crop,
+      id: `crop-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      timestamp: Date.now(),
+    }));
+    
+    setSavedCrops((prev) => [...prev, ...duplicates]);
+    setSelectedCrops(new Set());
+    toast.success(`Copied ${duplicates.length} crop(s)`);
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedCrops.size === 0) {
+      toast.error("Select crops to delete");
+      return;
+    }
+    
+    setSavedCrops((prev) => prev.filter((crop) => !selectedCrops.has(crop.id)));
+    setSelectedCrops(new Set());
+    toast.success("Selected crops deleted");
+  };
+
+  const handlePrint = () => {
+    if (savedCrops.length === 0) {
+      toast.error("No crops to print");
+      return;
+    }
+    
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      toast.error("Popup blocked - please allow popups");
+      return;
+    }
+    
+    const cropsToUse = selectedCrops.size > 0
+      ? savedCrops.filter((crop) => selectedCrops.has(crop.id))
+      : savedCrops;
+    
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Print Crops</title>
+          <style>
+            body { margin: 0; padding: 20px; }
+            .crop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+            img { max-width: 100%; height: auto; border: 1px solid #ccc; }
+            @media print {
+              .crop-grid { gap: 10px; }
+              img { page-break-inside: avoid; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="crop-grid">
+            ${cropsToUse.map((crop) => `<img src="${crop.dataUrl}" alt="Crop ${crop.width}x${crop.height}" />`).join("")}
+          </div>
+          <script>
+            window.onload = () => {
+              setTimeout(() => {
+                window.print();
+              }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   };
 
   const cropPxW = inchesToPx(cropSize.w);
@@ -490,18 +738,26 @@ const Index = () => {
               />
             </div>
 
-            <div className="mt-4 flex items-center justify-between gap-3">
+            <div className="mt-4 flex flex-col gap-3">
               <p className="text-xs text-muted-foreground">
                 Pan: drag • Zoom: wheel • Arrow keys for fine adjustment
               </p>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button onClick={resetImageState} variant="outline" size="sm" disabled={!imageLoaded}>
                   <RotateCcw className="mr-2 h-4 w-4" />
                   Reset
                 </Button>
-                <Button onClick={handleExport} size="sm" disabled={!imageLoaded}>
+                <Button onClick={handleSaveCrop} variant="default" size="sm" disabled={!imageLoaded}>
+                  <Save className="mr-2 h-4 w-4" />
+                  Save to Gallery
+                </Button>
+                <Button onClick={handleExport} variant="default" size="sm" disabled={!imageLoaded}>
                   <Download className="mr-2 h-4 w-4" />
                   Export PNG
+                </Button>
+                <Button onClick={handlePrint} variant="outline" size="sm" disabled={savedCrops.length === 0}>
+                  <Printer className="mr-2 h-4 w-4" />
+                  Print {selectedCrops.size > 0 ? `(${selectedCrops.size})` : `All (${savedCrops.length})`}
                 </Button>
               </div>
             </div>
@@ -673,6 +929,26 @@ const Index = () => {
                 </div>
 
                 <div>
+                  <Label className="text-xs flex items-center gap-2">
+                    <Sparkles className="h-3 w-3" />
+                    Clarity: {clarity.toFixed(1)}
+                  </Label>
+                  <Slider
+                    value={[targetClarity]}
+                    onValueChange={handleClarityChange}
+                    min={-100}
+                    max={100}
+                    step={1}
+                    className="mt-2"
+                    disabled={!imageLoaded}
+                  />
+                  <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                    <span>Soft</span>
+                    <span>Sharp</span>
+                  </div>
+                </div>
+
+                <div>
                   <Label className="text-xs">Fit mode</Label>
                   <Select value={fitMode} onValueChange={(v: any) => setFitMode(v)}>
                     <SelectTrigger className="mt-1">
@@ -700,6 +976,53 @@ const Index = () => {
                 <div>Physical: {cropSize.w.toFixed(2)} × {cropSize.h.toFixed(2)} in</div>
               </div>
             </Card>
+
+            {savedCrops.length > 0 && (
+              <Card className="bg-card/80 p-4 backdrop-blur-sm">
+                <div className="mb-3 flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-accent">
+                    Saved Crops ({savedCrops.length})
+                  </h2>
+                  {selectedCrops.size > 0 && (
+                    <div className="flex gap-1">
+                      <Button variant="ghost" size="sm" onClick={handleCopySelected}>
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={handleDeleteSelected}>
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2 max-h-[400px] overflow-y-auto">
+                  {savedCrops.map((crop) => (
+                    <div
+                      key={crop.id}
+                      className={`relative cursor-pointer rounded-md border-2 p-1 transition-all ${
+                        selectedCrops.has(crop.id)
+                          ? "border-accent shadow-lg"
+                          : "border-border hover:border-accent/50"
+                      }`}
+                      onClick={() => toggleCropSelection(crop.id)}
+                    >
+                      <img
+                        src={crop.dataUrl}
+                        alt={`Crop ${crop.width}x${crop.height}`}
+                        className="w-full h-auto rounded"
+                      />
+                      <div className="mt-1 text-[10px] text-muted-foreground text-center">
+                        {crop.width}×{crop.height}px
+                      </div>
+                      {selectedCrops.has(crop.id) && (
+                        <div className="absolute top-2 right-2 bg-accent text-background rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold">
+                          ✓
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
           </div>
         </div>
       </div>
