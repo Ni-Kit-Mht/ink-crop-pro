@@ -97,7 +97,7 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
     const newX = e.clientX - rect.left - dragOffset.x;
     const newY = e.clientY - rect.top - dragOffset.y;
     
-    setPhotos(photos.map(p => 
+    setPhotos(prevPhotos => prevPhotos.map(p => 
       p.id === selectedPhotoId 
         ? { ...p, x: Math.max(0, Math.min(newX, pageWidthPx - p.width)), y: Math.max(0, Math.min(newY, pageHeightPx - p.height)) }
         : p
@@ -125,39 +125,42 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
     const step = e.shiftKey ? 10 : 1;
     let handled = false;
     
-    setPhotos(photos.map(p => {
-      if (p.id !== selectedPhotoId) return p;
-      
-      let newX = p.x;
-      let newY = p.y;
-      
-      switch (e.key) {
-        case 'ArrowLeft':
-          newX = Math.max(0, p.x - step);
-          handled = true;
-          break;
-        case 'ArrowRight':
-          newX = Math.min(pageWidthPx - p.width, p.x + step);
-          handled = true;
-          break;
-        case 'ArrowUp':
-          newY = Math.max(0, p.y - step);
-          handled = true;
-          break;
-        case 'ArrowDown':
-          newY = Math.min(pageHeightPx - p.height, p.y + step);
-          handled = true;
-          break;
-        case 'Delete':
-        case 'Backspace':
-          handleDeletePhoto(p.id);
-          handled = true;
-          break;
-      }
-      
-      if (handled) e.preventDefault();
-      return { ...p, x: newX, y: newY };
-    }));
+    setPhotos(prevPhotos => {
+      return prevPhotos.map(p => {
+        if (p.id !== selectedPhotoId) return p;
+        
+        let newX = p.x;
+        let newY = p.y;
+        
+        switch (e.key) {
+          case 'ArrowLeft':
+            newX = Math.max(0, p.x - step);
+            handled = true;
+            break;
+          case 'ArrowRight':
+            newX = Math.min(pageWidthPx - p.width, p.x + step);
+            handled = true;
+            break;
+          case 'ArrowUp':
+            newY = Math.max(0, p.y - step);
+            handled = true;
+            break;
+          case 'ArrowDown':
+            newY = Math.min(pageHeightPx - p.height, p.y + step);
+            handled = true;
+            break;
+          case 'Delete':
+          case 'Backspace':
+            // Handle deletion separately to avoid returning modified photo
+            setTimeout(() => handleDeletePhoto(p.id), 0);
+            handled = true;
+            return p;
+        }
+        
+        if (handled) e.preventDefault();
+        return { ...p, x: newX, y: newY };
+      });
+    });
   };
 
   useEffect(() => {
@@ -174,58 +177,52 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
-    const printContent = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Print Layout</title>
-          <style>
-            @page {
-              size: ${currentPageSize.widthIn}in ${currentPageSize.heightIn}in;
-              margin: 0;
-            }
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body {
-              width: ${currentPageSize.widthIn}in;
-              height: ${currentPageSize.heightIn}in;
-              position: relative;
-              background: white;
-            }
-            .photo {
-              position: absolute;
-              overflow: hidden;
-            }
-            .photo img {
-              width: 100%;
-              height: 100%;
-              object-fit: cover;
-            }
-            @media print {
-              body { background: white; }
-            }
-          </style>
-        </head>
-        <body>
-          ${photos.map(photo => `
-            <div class="photo" style="
-              left: ${(photo.x / pageWidthPx) * 100}%;
-              top: ${(photo.y / pageHeightPx) * 100}%;
-              width: ${(photo.width / pageWidthPx) * 100}%;
-              height: ${(photo.height / pageHeightPx) * 100}%;
-            ">
-              <img src="${photo.dataUrl}" alt="Photo" />
-            </div>
-          `).join('')}
-          <script>
-            window.onload = () => {
-              setTimeout(() => {
-                window.print();
-              }, 500);
-            };
-          </script>
-        </body>
-      </html>
-    `;
+    const printContent = `<!DOCTYPE html>
+<html>
+<head>
+<title>Print Layout</title>
+<style>
+@page {
+  size: ${currentPageSize.widthIn}in ${currentPageSize.heightIn}in;
+  margin: 0;
+}
+* {
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box;
+}
+html, body {
+  width: ${currentPageSize.widthIn}in;
+  height: ${currentPageSize.heightIn}in;
+  overflow: hidden;
+}
+body {
+  position: relative;
+  background: white;
+}
+.photo {
+  position: absolute;
+  overflow: hidden;
+}
+.photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+@media print {
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+}
+</style>
+</head>
+<body>
+${photos.map(photo => `<div class="photo" style="left:${(photo.x / pageWidthPx) * 100}%;top:${(photo.y / pageHeightPx) * 100}%;width:${(photo.width / pageWidthPx) * 100}%;height:${(photo.height / pageHeightPx) * 100}%"><img src="${photo.dataUrl}" alt="Photo"/></div>`).join('')}
+<script>window.onload=()=>{setTimeout(()=>{window.print()},500)};</script>
+</body>
+</html>`;
 
     printWindow.document.write(printContent);
     printWindow.document.close();
