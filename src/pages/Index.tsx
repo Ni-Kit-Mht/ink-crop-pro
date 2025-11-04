@@ -698,24 +698,15 @@ const Index = () => {
               onDrop={handleDrop}
               onClick={handleCanvasClick}
             >
-              <div 
+              <canvas
+                ref={canvasRef}
+                className={`max-w-full rounded-md shadow-2xl ${
+                  imageLoaded ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+                }`}
+                onMouseDown={handleMouseDown}
+                onWheel={handleWheel}
                 style={{ touchAction: 'none' }}
-                onWheel={(e) => {
-                  if (imageLoaded) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }
-                }}
-              >
-                <canvas
-                  ref={canvasRef}
-                  className={`max-w-full rounded-md shadow-2xl ${
-                    imageLoaded ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
-                  }`}
-                  onMouseDown={handleMouseDown}
-                  onWheel={handleWheel}
-                />
-              </div>
+              />
               {!imageLoaded && (
                 <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
                   <Upload className="h-12 w-12 text-muted-foreground/50" />

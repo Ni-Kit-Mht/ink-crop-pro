@@ -104,8 +104,13 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
       return;
     }
     
-    // Single select and start dragging
-    setSelectedPhotoIds(new Set([photoId]));
+    // If clicking on an already selected photo, keep all selections and start dragging
+    const isAlreadySelected = selectedPhotoIds.has(photoId);
+    if (!isAlreadySelected) {
+      // Single select only if clicking on unselected photo
+      setSelectedPhotoIds(new Set([photoId]));
+    }
+    
     setDragging(true);
     
     const photo = photos.find(p => p.id === photoId);
@@ -129,13 +134,26 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
     const newX = e.clientX - rect.left - dragOffset.x;
     const newY = e.clientY - rect.top - dragOffset.y;
     
-    const selectedId = Array.from(selectedPhotoIds)[0];
+    // Get the primary selected photo (the one being dragged)
+    const selectedIds = Array.from(selectedPhotoIds);
+    const primaryPhoto = photos.find(p => selectedIds.includes(p.id));
+    if (!primaryPhoto) return;
     
-    setPhotos(prevPhotos => prevPhotos.map(p => 
-      p.id === selectedId 
-        ? { ...p, x: Math.max(0, Math.min(newX, pageWidthPx - p.width)), y: Math.max(0, Math.min(newY, pageHeightPx - p.height)) }
-        : p
-    ));
+    // Calculate the delta movement
+    const deltaX = newX - primaryPhoto.x;
+    const deltaY = newY - primaryPhoto.y;
+    
+    // Move all selected photos by the same delta
+    setPhotos(prevPhotos => prevPhotos.map(p => {
+      if (selectedPhotoIds.has(p.id)) {
+        return {
+          ...p,
+          x: Math.max(0, Math.min(p.x + deltaX, pageWidthPx - p.width)),
+          y: Math.max(0, Math.min(p.y + deltaY, pageHeightPx - p.height))
+        };
+      }
+      return p;
+    }));
   };
 
   const handleMouseUp = () => {
@@ -159,11 +177,9 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
     const step = e.shiftKey ? 10 : 1;
     let handled = false;
     
-    const selectedId = Array.from(selectedPhotoIds)[0];
-    
     setPhotos(prevPhotos => {
       return prevPhotos.map(p => {
-        if (p.id !== selectedId) return p;
+        if (!selectedPhotoIds.has(p.id)) return p;
         
         let newX = p.x;
         let newY = p.y;
@@ -187,8 +203,8 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
             break;
           case 'Delete':
           case 'Backspace':
-            // Handle deletion separately to avoid returning modified photo
-            setTimeout(() => handleDeletePhoto(p.id), 0);
+            // Handle deletion of all selected photos
+            setTimeout(() => handleDeleteSelected(), 0);
             handled = true;
             return p;
         }
