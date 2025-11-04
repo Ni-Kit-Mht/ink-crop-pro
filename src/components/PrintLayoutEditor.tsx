@@ -3,7 +3,8 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { X, Printer, Plus, Trash2 } from "lucide-react";
+import { X, Printer, Plus, Trash2, Check } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 
 type PhotoOnPage = {
@@ -15,6 +16,7 @@ type PhotoOnPage = {
   height: number;
   originalWidth: number;
   originalHeight: number;
+  hasBorder: boolean;
 };
 
 type PageSize = {
@@ -36,9 +38,11 @@ interface PrintLayoutEditorProps {
 export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProps) => {
   const [pageSize, setPageSize] = useState<string>("4x6");
   const [photos, setPhotos] = useState<PhotoOnPage[]>([]);
-  const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
+  const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(new Set());
   const [dragging, setDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [showBorderByDefault, setShowBorderByDefault] = useState(true);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; photoId: string } | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
 
   const DPI = 96; // Screen DPI for display
@@ -60,6 +64,7 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
       height: photoHeight,
       originalWidth: crop.width,
       originalHeight: crop.height,
+      hasBorder: showBorderByDefault,
     };
     
     setPhotos([...photos, newPhoto]);
@@ -68,12 +73,39 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
 
   const handleDeletePhoto = (photoId: string) => {
     setPhotos(photos.filter(p => p.id !== photoId));
-    if (selectedPhotoId === photoId) setSelectedPhotoId(null);
+    setSelectedPhotoIds(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(photoId);
+      return newSet;
+    });
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedPhotoIds.size === 0) return;
+    setPhotos(photos.filter(p => !selectedPhotoIds.has(p.id)));
+    setSelectedPhotoIds(new Set());
+    toast.success("Selected photos deleted");
   };
 
   const handleMouseDown = (e: React.MouseEvent, photoId: string) => {
     e.stopPropagation();
-    setSelectedPhotoId(photoId);
+    
+    // Multi-select with Ctrl or Shift
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      setSelectedPhotoIds(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(photoId)) {
+          newSet.delete(photoId);
+        } else {
+          newSet.add(photoId);
+        }
+        return newSet;
+      });
+      return;
+    }
+    
+    // Single select and start dragging
+    setSelectedPhotoIds(new Set([photoId]));
     setDragging(true);
     
     const photo = photos.find(p => p.id === photoId);
@@ -89,7 +121,7 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
   };
 
   const handleMouseMove = (e: MouseEvent) => {
-    if (!dragging || !selectedPhotoId) return;
+    if (!dragging || selectedPhotoIds.size === 0) return;
     
     const rect = pageRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -97,8 +129,10 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
     const newX = e.clientX - rect.left - dragOffset.x;
     const newY = e.clientY - rect.top - dragOffset.y;
     
+    const selectedId = Array.from(selectedPhotoIds)[0];
+    
     setPhotos(prevPhotos => prevPhotos.map(p => 
-      p.id === selectedPhotoId 
+      p.id === selectedId 
         ? { ...p, x: Math.max(0, Math.min(newX, pageWidthPx - p.width)), y: Math.max(0, Math.min(newY, pageHeightPx - p.height)) }
         : p
     ));
@@ -117,17 +151,19 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
         window.removeEventListener('mouseup', handleMouseUp);
       };
     }
-  }, [dragging, selectedPhotoId, dragOffset, photos, pageWidthPx, pageHeightPx]);
+  }, [dragging, selectedPhotoIds, dragOffset, photos, pageWidthPx, pageHeightPx]);
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (!selectedPhotoId) return;
+    if (selectedPhotoIds.size === 0) return;
     
     const step = e.shiftKey ? 10 : 1;
     let handled = false;
     
+    const selectedId = Array.from(selectedPhotoIds)[0];
+    
     setPhotos(prevPhotos => {
       return prevPhotos.map(p => {
-        if (p.id !== selectedPhotoId) return p;
+        if (p.id !== selectedId) return p;
         
         let newX = p.x;
         let newY = p.y;
@@ -166,7 +202,32 @@ export const PrintLayoutEditor = ({ savedCrops, onClose }: PrintLayoutEditorProp
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedPhotoId, photos, pageWidthPx, pageHeightPx]);
+  }, [selectedPhotoIds, photos, pageWidthPx, pageHeightPx]);
+
+  const handleContextMenu = (e: React.MouseEvent, photoId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, photoId });
+  };
+
+  const togglePhotoBorder = (photoId: string) => {
+    setPhotos(prevPhotos => prevPhotos.map(p => 
+      p.id === photoId ? { ...p, hasBorder: !p.hasBorder } : p
+    ));
+    setContextMenu(null);
+  };
+
+  const handlePageMouseLeave = () => {
+    setSelectedPhotoIds(new Set());
+  };
+
+  useEffect(() => {
+    const handleClickOutside = () => setContextMenu(null);
+    if (contextMenu) {
+      window.addEventListener('click', handleClickOutside);
+      return () => window.removeEventListener('click', handleClickOutside);
+    }
+  }, [contextMenu]);
 
   const handlePrint = () => {
     if (photos.length === 0) {
@@ -219,7 +280,7 @@ body {
 </style>
 </head>
 <body>
-${photos.map(photo => `<div class="photo" style="left:${(photo.x / pageWidthPx) * 100}%;top:${(photo.y / pageHeightPx) * 100}%;width:${(photo.width / pageWidthPx) * 100}%;height:${(photo.height / pageHeightPx) * 100}%"><img src="${photo.dataUrl}" alt="Photo"/></div>`).join('')}
+${photos.map(photo => `<div class="photo" style="left:${(photo.x / pageWidthPx) * 100}%;top:${(photo.y / pageHeightPx) * 100}%;width:${(photo.width / pageWidthPx) * 100}%;height:${(photo.height / pageHeightPx) * 100}%${photo.hasBorder ? ';border:2px solid black;box-sizing:border-box' : ''}"><img src="${photo.dataUrl}" alt="Photo"/></div>`).join('')}
 <script>window.onload=()=>{setTimeout(()=>{window.print()},500)};</script>
 </body>
 </html>`;
@@ -294,7 +355,21 @@ ${photos.map(photo => `<div class="photo" style="left:${(photo.x / pageWidthPx) 
               </div>
             </div>
 
-            <div className="pt-4 space-y-2">
+            <div className="pt-4 space-y-3">
+              <div className="flex items-center space-x-2 p-3 bg-muted/50 rounded-lg">
+                <Checkbox 
+                  id="border-default" 
+                  checked={showBorderByDefault}
+                  onCheckedChange={(checked) => setShowBorderByDefault(checked as boolean)}
+                />
+                <label
+                  htmlFor="border-default"
+                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                >
+                  Add border to new photos
+                </label>
+              </div>
+
               <Button
                 onClick={handlePrint}
                 disabled={photos.length === 0}
@@ -302,6 +377,15 @@ ${photos.map(photo => `<div class="photo" style="left:${(photo.x / pageWidthPx) 
               >
                 <Printer className="h-4 w-4 mr-2" />
                 Print Layout
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleDeleteSelected}
+                disabled={selectedPhotoIds.size === 0}
+                className="w-full border-border hover:bg-secondary"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete Selected ({selectedPhotoIds.size})
               </Button>
               <Button
                 variant="outline"
@@ -314,10 +398,10 @@ ${photos.map(photo => `<div class="photo" style="left:${(photo.x / pageWidthPx) 
               </Button>
             </div>
 
-            {selectedPhotoId && (
+            {selectedPhotoIds.size > 0 && (
               <div className="p-3 bg-muted rounded-lg border border-border">
                 <p className="text-xs text-muted-foreground">
-                  Selected photo • Use arrow keys to move (Shift for larger steps)
+                  {selectedPhotoIds.size} selected • Ctrl/Cmd+Click for multi-select • Arrow keys to move
                 </p>
               </div>
             )}
@@ -333,7 +417,8 @@ ${photos.map(photo => `<div class="photo" style="left:${(photo.x / pageWidthPx) 
                   width: `${pageWidthPx}px`,
                   height: `${pageHeightPx}px`,
                 }}
-                onClick={() => setSelectedPhotoId(null)}
+                onClick={() => setSelectedPhotoIds(new Set())}
+                onMouseLeave={handlePageMouseLeave}
               >
                 {/* Grid overlay */}
                 <div className="absolute inset-0 pointer-events-none opacity-10">
@@ -352,17 +437,19 @@ ${photos.map(photo => `<div class="photo" style="left:${(photo.x / pageWidthPx) 
                   <div
                     key={photo.id}
                     className={`absolute cursor-move ${
-                      selectedPhotoId === photo.id
+                      selectedPhotoIds.has(photo.id)
                         ? 'ring-2 ring-primary shadow-lg z-10'
                         : 'hover:ring-2 hover:ring-primary/50'
-                    }`}
+                    } ${photo.hasBorder ? 'border-2 border-black' : ''}`}
                     style={{
                       left: `${photo.x}px`,
                       top: `${photo.y}px`,
                       width: `${photo.width}px`,
                       height: `${photo.height}px`,
+                      boxSizing: 'border-box',
                     }}
                     onMouseDown={(e) => handleMouseDown(e, photo.id)}
+                    onContextMenu={(e) => handleContextMenu(e, photo.id)}
                   >
                     <img
                       src={photo.dataUrl}
@@ -370,7 +457,7 @@ ${photos.map(photo => `<div class="photo" style="left:${(photo.x / pageWidthPx) 
                       className="w-full h-full object-cover pointer-events-none"
                       draggable={false}
                     />
-                    {selectedPhotoId === photo.id && (
+                    {selectedPhotoIds.has(photo.id) && (
                       <Button
                         size="icon"
                         variant="destructive"
@@ -401,6 +488,30 @@ ${photos.map(photo => `<div class="photo" style="left:${(photo.x / pageWidthPx) 
           </div>
         </div>
       </Card>
+
+      {contextMenu && (
+        <div
+          className="fixed bg-card border border-border rounded-lg shadow-lg py-1 z-50"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            className="w-full px-4 py-2 text-sm text-left hover:bg-muted flex items-center gap-2"
+            onClick={() => togglePhotoBorder(contextMenu.photoId)}
+          >
+            {photos.find(p => p.id === contextMenu.photoId)?.hasBorder ? (
+              <>
+                <X className="h-3 w-3" />
+                Remove Border
+              </>
+            ) : (
+              <>
+                <Check className="h-3 w-3" />
+                Apply Border
+              </>
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 };

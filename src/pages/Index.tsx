@@ -40,6 +40,9 @@ const Index = () => {
   const [targetClarity, setTargetClarity] = useState(0);
   const [animatingClarity, setAnimatingClarity] = useState(false);
   
+  const [brightness, setBrightness] = useState(0);
+  const [contrast, setContrast] = useState(0);
+  
   const [savedCrops, setSavedCrops] = useState<SavedCrop[]>([]);
   const [selectedCrops, setSelectedCrops] = useState<Set<string>>(new Set());
   const [showPrintLayout, setShowPrintLayout] = useState(false);
@@ -144,19 +147,38 @@ const Index = () => {
     }
   }, []);
 
-  const applyClarity = useCallback((clarityValue: number, sourceImageData: ImageData) => {
+  const applyImageFilters = useCallback((sourceImageData: ImageData, clarityValue: number, brightnessValue: number, contrastValue: number) => {
     const imgData = new ImageData(
       new Uint8ClampedArray(sourceImageData.data),
       sourceImageData.width,
       sourceImageData.height
     );
 
+    // Apply clarity first
     if (clarityValue !== 0) {
       const kernel = clarityValue >= 0
         ? [0, -1, 0, -1, 5 + clarityValue / 20, -1, 0, -1, 0]
         : [0, 1, 0, 1, 3 + clarityValue / 50, 1, 0, 1, 0];
       
       applyConvolution(imgData, kernel);
+    }
+
+    // Apply brightness and contrast
+    if (brightnessValue !== 0 || contrastValue !== 0) {
+      const data = imgData.data;
+      const factor = (259 * (contrastValue + 255)) / (255 * (259 - contrastValue));
+      
+      for (let i = 0; i < data.length; i += 4) {
+        // Apply contrast
+        data[i] = factor * (data[i] - 128) + 128;
+        data[i + 1] = factor * (data[i + 1] - 128) + 128;
+        data[i + 2] = factor * (data[i + 2] - 128) + 128;
+        
+        // Apply brightness
+        data[i] = Math.min(255, Math.max(0, data[i] + brightnessValue));
+        data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + brightnessValue));
+        data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + brightnessValue));
+      }
     }
 
     return imgData;
@@ -188,9 +210,9 @@ const Index = () => {
 
       const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
       
-      // Apply clarity if needed
-      if (clarity !== 0 && originalImageData) {
-        const processedData = applyClarity(clarity, imageData);
+      // Apply filters if needed
+      if (clarity !== 0 || brightness !== 0 || contrast !== 0) {
+        const processedData = applyImageFilters(imageData, clarity, brightness, contrast);
         ctx.putImageData(processedData, 0, 0);
       } else {
         ctx.putImageData(imageData, 0, 0);
@@ -224,7 +246,7 @@ const Index = () => {
     ctx.lineTo(cx + cropPxW / 2, cy + cropPxH / 2 + 12);
     ctx.stroke();
     ctx.restore();
-  }, [imageLoaded, image, imageState, cropSize, dpi, paperSize, clarity, originalImageData, applyClarity]);
+  }, [imageLoaded, image, imageState, cropSize, dpi, paperSize, clarity, brightness, contrast, applyImageFilters]);
 
   useEffect(() => {
     updateCanvasSize();
@@ -375,6 +397,7 @@ const Index = () => {
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     if (!imageLoaded) return;
     e.preventDefault();
+    e.stopPropagation();
     
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -508,10 +531,10 @@ const Index = () => {
     outCtx.drawImage(image, 0, 0);
     outCtx.restore();
     
-    // Apply clarity to the cropped area
-    if (clarity !== 0) {
+    // Apply filters to the cropped area
+    if (clarity !== 0 || brightness !== 0 || contrast !== 0) {
       const imageData = outCtx.getImageData(0, 0, outCanvas.width, outCanvas.height);
-      const processedData = applyClarity(clarity, imageData);
+      const processedData = applyImageFilters(imageData, clarity, brightness, contrast);
       outCtx.putImageData(processedData, 0, 0);
     }
     
@@ -675,14 +698,24 @@ const Index = () => {
               onDrop={handleDrop}
               onClick={handleCanvasClick}
             >
-              <canvas
-                ref={canvasRef}
-                className={`max-w-full rounded-md shadow-2xl ${
-                  imageLoaded ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
-                }`}
-                onMouseDown={handleMouseDown}
-                onWheel={handleWheel}
-              />
+              <div 
+                style={{ touchAction: 'none' }}
+                onWheel={(e) => {
+                  if (imageLoaded) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }
+                }}
+              >
+                <canvas
+                  ref={canvasRef}
+                  className={`max-w-full rounded-md shadow-2xl ${
+                    imageLoaded ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+                  }`}
+                  onMouseDown={handleMouseDown}
+                  onWheel={handleWheel}
+                />
+              </div>
               {!imageLoaded && (
                 <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
                   <Upload className="h-12 w-12 text-muted-foreground/50" />
@@ -907,6 +940,40 @@ const Index = () => {
                   <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
                     <span>Soft</span>
                     <span>Sharp</span>
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs">Brightness: {brightness}</Label>
+                  <Slider
+                    value={[brightness]}
+                    onValueChange={(v) => setBrightness(v[0])}
+                    min={-100}
+                    max={100}
+                    step={1}
+                    className="mt-2"
+                    disabled={!imageLoaded}
+                  />
+                  <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                    <span>Darker</span>
+                    <span>Brighter</span>
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs">Contrast: {contrast}</Label>
+                  <Slider
+                    value={[contrast]}
+                    onValueChange={(v) => setContrast(v[0])}
+                    min={-100}
+                    max={100}
+                    step={1}
+                    className="mt-2"
+                    disabled={!imageLoaded}
+                  />
+                  <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                    <span>Low</span>
+                    <span>High</span>
                   </div>
                 </div>
 
