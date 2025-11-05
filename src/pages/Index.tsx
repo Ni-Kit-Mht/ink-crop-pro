@@ -5,7 +5,8 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { Upload, RotateCcw, Download, Maximize2, Minimize2, Sparkles, Save, Printer, Copy, Trash2 } from "lucide-react";
+import { Upload, RotateCcw, Download, Maximize2, Minimize2, Sparkles, Save, Printer, Copy, Trash2, RotateCw, HelpCircle } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { PrintLayoutEditor } from "@/components/PrintLayoutEditor";
 
@@ -42,6 +43,9 @@ const Index = () => {
   
   const [brightness, setBrightness] = useState(0);
   const [contrast, setContrast] = useState(0);
+  const [saturation, setSaturation] = useState(0);
+  const [hue, setHue] = useState(0);
+  const [rotation, setRotation] = useState(0);
   
   const [savedCrops, setSavedCrops] = useState<SavedCrop[]>([]);
   const [selectedCrops, setSelectedCrops] = useState<Set<string>>(new Set());
@@ -147,7 +151,7 @@ const Index = () => {
     }
   }, []);
 
-  const applyImageFilters = useCallback((sourceImageData: ImageData, clarityValue: number, brightnessValue: number, contrastValue: number) => {
+  const applyImageFilters = useCallback((sourceImageData: ImageData, clarityValue: number, brightnessValue: number, contrastValue: number, saturationValue: number, hueValue: number) => {
     const imgData = new ImageData(
       new Uint8ClampedArray(sourceImageData.data),
       sourceImageData.width,
@@ -163,22 +167,48 @@ const Index = () => {
       applyConvolution(imgData, kernel);
     }
 
-    // Apply brightness and contrast
-    if (brightnessValue !== 0 || contrastValue !== 0) {
-      const data = imgData.data;
-      const factor = (259 * (contrastValue + 255)) / (255 * (259 - contrastValue));
+    // Apply brightness, contrast, saturation, and hue
+    const data = imgData.data;
+    const factor = (259 * (contrastValue + 255)) / (255 * (259 - contrastValue));
+    const satFactor = (saturationValue + 100) / 100;
+    const hueRadians = (hueValue * Math.PI) / 180;
+    
+    for (let i = 0; i < data.length; i += 4) {
+      let r = data[i];
+      let g = data[i + 1];
+      let b = data[i + 2];
       
-      for (let i = 0; i < data.length; i += 4) {
-        // Apply contrast
-        data[i] = factor * (data[i] - 128) + 128;
-        data[i + 1] = factor * (data[i + 1] - 128) + 128;
-        data[i + 2] = factor * (data[i + 2] - 128) + 128;
-        
-        // Apply brightness
-        data[i] = Math.min(255, Math.max(0, data[i] + brightnessValue));
-        data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + brightnessValue));
-        data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + brightnessValue));
+      // Apply contrast
+      r = factor * (r - 128) + 128;
+      g = factor * (g - 128) + 128;
+      b = factor * (b - 128) + 128;
+      
+      // Apply brightness
+      r = r + brightnessValue;
+      g = g + brightnessValue;
+      b = b + brightnessValue;
+      
+      // Apply saturation
+      const gray = 0.2989 * r + 0.5870 * g + 0.1140 * b;
+      r = gray + (r - gray) * satFactor;
+      g = gray + (g - gray) * satFactor;
+      b = gray + (b - gray) * satFactor;
+      
+      // Apply hue rotation (simplified)
+      if (hueValue !== 0) {
+        const cosH = Math.cos(hueRadians);
+        const sinH = Math.sin(hueRadians);
+        const rNew = r * (0.299 + 0.701 * cosH + 0.168 * sinH) + g * (0.587 - 0.587 * cosH + 0.330 * sinH) + b * (0.114 - 0.114 * cosH - 0.497 * sinH);
+        const gNew = r * (0.299 - 0.299 * cosH - 0.328 * sinH) + g * (0.587 + 0.413 * cosH + 0.035 * sinH) + b * (0.114 - 0.114 * cosH + 0.292 * sinH);
+        const bNew = r * (0.299 - 0.300 * cosH + 1.250 * sinH) + g * (0.587 - 0.588 * cosH - 1.050 * sinH) + b * (0.114 + 0.886 * cosH - 0.203 * sinH);
+        r = rNew;
+        g = gNew;
+        b = bNew;
       }
+      
+      data[i] = Math.min(255, Math.max(0, r));
+      data[i + 1] = Math.min(255, Math.max(0, g));
+      data[i + 2] = Math.min(255, Math.max(0, b));
     }
 
     return imgData;
@@ -202,7 +232,11 @@ const Index = () => {
       const tempCtx = tempCanvas.getContext("2d");
       if (!tempCtx) return;
 
+      // Apply rotation
       tempCtx.save();
+      tempCtx.translate(canvas.width / 2, canvas.height / 2);
+      tempCtx.rotate((rotation * Math.PI) / 180);
+      tempCtx.translate(-canvas.width / 2, -canvas.height / 2);
       tempCtx.translate(imageState.offsetX, imageState.offsetY);
       tempCtx.scale(imageState.scale, imageState.scale);
       tempCtx.drawImage(image, 0, 0);
@@ -211,8 +245,8 @@ const Index = () => {
       const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
       
       // Apply filters if needed
-      if (clarity !== 0 || brightness !== 0 || contrast !== 0) {
-        const processedData = applyImageFilters(imageData, clarity, brightness, contrast);
+      if (clarity !== 0 || brightness !== 0 || contrast !== 0 || saturation !== 0 || hue !== 0) {
+        const processedData = applyImageFilters(imageData, clarity, brightness, contrast, saturation, hue);
         ctx.putImageData(processedData, 0, 0);
       } else {
         ctx.putImageData(imageData, 0, 0);
@@ -246,7 +280,7 @@ const Index = () => {
     ctx.lineTo(cx + cropPxW / 2, cy + cropPxH / 2 + 12);
     ctx.stroke();
     ctx.restore();
-  }, [imageLoaded, image, imageState, cropSize, dpi, paperSize, clarity, brightness, contrast, applyImageFilters]);
+  }, [imageLoaded, image, imageState, cropSize, dpi, paperSize, clarity, brightness, contrast, saturation, hue, rotation, applyImageFilters]);
 
   useEffect(() => {
     updateCanvasSize();
@@ -532,9 +566,9 @@ const Index = () => {
     outCtx.restore();
     
     // Apply filters to the cropped area
-    if (clarity !== 0 || brightness !== 0 || contrast !== 0) {
+    if (clarity !== 0 || brightness !== 0 || contrast !== 0 || saturation !== 0 || hue !== 0) {
       const imageData = outCtx.getImageData(0, 0, outCanvas.width, outCanvas.height);
-      const processedData = applyImageFilters(imageData, clarity, brightness, contrast);
+      const processedData = applyImageFilters(imageData, clarity, brightness, contrast, saturation, hue);
       outCtx.putImageData(processedData, 0, 0);
     }
     
@@ -745,6 +779,74 @@ const Index = () => {
                   <Printer className="mr-2 h-4 w-4" />
                   Print Layout
                 </Button>
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" size="sm">
+                      <HelpCircle className="mr-2 h-4 w-4" />
+                      How to Use
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                    <DialogHeader>
+                      <DialogTitle>📖 How to Use Image Cropper</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 text-sm">
+                      <div>
+                        <h3 className="font-semibold text-accent mb-2">Getting Started</h3>
+                        <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                          <li><strong>Upload Image:</strong> Click, drag & drop, or paste (Ctrl+V) an image</li>
+                          <li><strong>Adjust Image:</strong> Use sliders to modify brightness, contrast, saturation, clarity, and hue</li>
+                          <li><strong>Zoom:</strong> Scroll mouse wheel or use the zoom slider</li>
+                          <li><strong>Pan:</strong> Click and drag the image to reposition</li>
+                        </ul>
+                      </div>
+                      
+                      <div>
+                        <h3 className="font-semibold text-accent mb-2">Image Manipulation</h3>
+                        <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                          <li><strong>Rotate:</strong> Click CW/CCW buttons to rotate 90°</li>
+                          <li><strong>Arrow Keys:</strong> Fine-tune position with 2px movements</li>
+                          <li><strong>Crop Presets:</strong> Quick crop to standard sizes (passport photos, etc.)</li>
+                          <li><strong>Fit Mode:</strong> Choose between "Fit" (show entire image) or "Fill" (fill crop area)</li>
+                        </ul>
+                      </div>
+                      
+                      <div>
+                        <h3 className="font-semibold text-accent mb-2">Saving & Exporting</h3>
+                        <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                          <li><strong>Save to Gallery:</strong> Store edited images in local gallery</li>
+                          <li><strong>Export PNG:</strong> Download cropped image as PNG file</li>
+                          <li><strong>Reset:</strong> Restore image to original position and zoom</li>
+                        </ul>
+                      </div>
+                      
+                      <div>
+                        <h3 className="font-semibold text-accent mb-2">Print Layout</h3>
+                        <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                          <li><strong>Add Images:</strong> Click gallery images to add to print layout</li>
+                          <li><strong>Drag & Drop:</strong> Move images around the canvas</li>
+                          <li><strong>Multi-Select:</strong> Hold Ctrl/Cmd and click multiple images</li>
+                          <li><strong>Shift-Click:</strong> Select range of images</li>
+                          <li><strong>Right Click:</strong> Toggle borders and rotate images</li>
+                          <li><strong>Delete:</strong> Press Delete key or click × icon</li>
+                          <li><strong>Paper Size:</strong> Choose 4×6", A4, or custom dimensions</li>
+                          <li><strong>Border:</strong> Add 2px black border to images (default: on)</li>
+                        </ul>
+                      </div>
+                      
+                      <div>
+                        <h3 className="font-semibold text-accent mb-2">Keyboard Shortcuts</h3>
+                        <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                          <li><strong>Arrow Keys:</strong> Move image or selected print items</li>
+                          <li><strong>Delete/Backspace:</strong> Remove selected items in print layout</li>
+                          <li><strong>Ctrl/Cmd + Click:</strong> Multi-select in print layout</li>
+                          <li><strong>Shift + Click:</strong> Range select in gallery</li>
+                          <li><strong>Escape:</strong> Deselect all in print layout</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </DialogContent>
+                </Dialog>
               </div>
             </div>
           </Card>
@@ -966,6 +1068,69 @@ const Index = () => {
                     <span>Low</span>
                     <span>High</span>
                   </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs">Saturation: {saturation}</Label>
+                  <Slider
+                    value={[saturation]}
+                    onValueChange={(v) => setSaturation(v[0])}
+                    min={-100}
+                    max={100}
+                    step={1}
+                    className="mt-2"
+                    disabled={!imageLoaded}
+                  />
+                  <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                    <span>Grayscale</span>
+                    <span>Vibrant</span>
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs">Hue: {hue}°</Label>
+                  <Slider
+                    value={[hue]}
+                    onValueChange={(v) => setHue(v[0])}
+                    min={0}
+                    max={360}
+                    step={1}
+                    className="mt-2"
+                    disabled={!imageLoaded}
+                  />
+                  <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                    <span>0°</span>
+                    <span>360°</span>
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs">Rotation</Label>
+                  <div className="mt-2 flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => setRotation((prev) => (prev - 90 + 360) % 360)}
+                      disabled={!imageLoaded}
+                    >
+                      <RotateCcw className="mr-1 h-4 w-4" />
+                      CCW
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => setRotation((prev) => (prev + 90) % 360)}
+                      disabled={!imageLoaded}
+                    >
+                      <RotateCw className="mr-1 h-4 w-4" />
+                      CW
+                    </Button>
+                  </div>
+                  <p className="mt-1 text-center text-xs text-muted-foreground">
+                    Current: {rotation}°
+                  </p>
                 </div>
 
                 <div>
